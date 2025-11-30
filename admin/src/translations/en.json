@@ -1,0 +1,22 @@
+{
+  "plugin.name": "Audit Logs",
+  "homepage.title": "Audit Logs Settings",
+  "homepage.description": "Enable or disable audit logging for each content type",
+  "homepage.contentType": "Content Type",
+  "homepage.enabled": "Enabled",
+  "homepage.actions": "Actions",
+  "homepage.viewLogs": "View Logs",
+  "homepage.loading": "Loading...",
+  "homepage.error": "Error loading settings",
+  "homepage.saveSuccess": "Settings saved successfully",
+  "homepage.saveError": "Error saving settings",
+  "logs.title": "Audit Logs",
+  "logs.contentType": "Content Type",
+  "logs.entityId": "Entity ID",
+  "logs.action": "Action",
+  "logs.user": "User",
+  "logs.date": "Date",
+  "logs.noLogs": "No logs found",
+  "logs.filterByContentType": "Filter by Content Type",
+  "logs.allContentTypes": "All Content Types"
+}
