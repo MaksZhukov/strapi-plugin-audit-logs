@@ -54,9 +54,13 @@ const service = ({ strapi }: { strapi: Core.Strapi }) => ({
 
       const settingsMap = new Map(settings.map((s) => [s.contentType, s.enabled]));
 
-      // Get all content types
+      // Get all content types (API and user collection)
       const contentTypes = Object.values(strapi.contentTypes)
-        .filter((ct: any) => ct.uid?.startsWith('api::') && ct.kind === 'collectionType')
+        .filter(
+          (ct: any) =>
+            (ct.uid?.startsWith('api::') || ct.uid === 'plugin::users-permissions.user') &&
+            ct.kind === 'collectionType'
+        )
         .map((ct: any) => ({
           contentType: ct.uid,
           enabled: settingsMap.get(ct.uid) ?? false,
@@ -79,7 +83,11 @@ const service = ({ strapi }: { strapi: Core.Strapi }) => ({
       const settingsMap = new Map(settings.map((s) => [s.contentType, s.enabled]));
 
       let allContentTypes = Object.values(strapi.contentTypes)
-        .filter((ct: any) => ct.uid?.startsWith('api::') && ct.kind === 'collectionType')
+        .filter(
+          (ct: any) =>
+            (ct.uid?.startsWith('api::') || ct.uid === 'plugin::users-permissions.user') &&
+            ct.kind === 'collectionType'
+        )
         .map((ct: any) => ({
           contentType: ct.uid,
           enabled: settingsMap.get(ct.uid) ?? false,
@@ -157,36 +165,23 @@ const service = ({ strapi }: { strapi: Core.Strapi }) => ({
   },
 
   /**
-   * Get audit logs for a content type
-   */
-  async getLogs(contentType: string, entityId?: string, limit = 50) {
-    try {
-      const where: any = { contentType };
-      if (entityId) {
-        where.entityId = entityId;
-      }
-
-      const logs = await strapi.db.query('plugin::audit-logs.audit-log').findMany({
-        where,
-        orderBy: { createdAt: 'desc' },
-        limit,
-      });
-
-      return logs;
-    } catch (error) {
-      strapi.log.error('Error getting audit logs:', error);
-      throw error;
-    }
-  },
-
-  /**
    * Get audit logs with pagination
    */
-  async getLogsPaginated(contentType?: string, page = 1, pageSize = 25, search = '') {
+  async getLogsPaginated(
+    contentType?: string,
+    page = 1,
+    pageSize = 25,
+    search = '',
+    entityId?: string
+  ) {
     try {
       const where: any = {};
       if (contentType) {
         where.contentType = contentType;
+      }
+
+      if (entityId) {
+        where.entityId = entityId;
       }
 
       if (search) {
@@ -246,7 +241,16 @@ const service = ({ strapi }: { strapi: Core.Strapi }) => ({
       (ct): ct is ContentType =>
         ct.info?.pluralName === pluralName &&
         ct.kind === 'collectionType' &&
-        ct.uid?.startsWith('api::')
+        (ct.uid?.startsWith('api::') || ct.uid?.startsWith('plugin::'))
+    );
+  },
+
+  /**
+   * Finds a content type by its UID
+   */
+  findContentTypeByUid(uid: string): ContentType | undefined {
+    return Object.values(strapi.contentTypes).find(
+      (ct): ct is ContentType => ct.uid === uid && ct.kind === 'collectionType'
     );
   },
 
@@ -323,13 +327,50 @@ const service = ({ strapi }: { strapi: Core.Strapi }) => ({
 
   /**
    * Determines the audit action from HTTP method and URL
+   * Also checks for publish/unpublish via publishedAt field changes
    */
-  getActionFromMethod(method: string, url: string): AuditAction | null {
+  getActionFromMethod(
+    method: string,
+    url: string,
+    requestBody?: Record<string, unknown>,
+    previousEntity?: Record<string, unknown> | null,
+    responseData?: Record<string, unknown>
+  ): AuditAction | null {
+    // Check for login action
+    if (url.includes('/auth/local') && method === 'POST') {
+      return 'login';
+    }
+
     if (url.includes('/actions/publish')) {
       return 'publish';
     }
     if (url.includes('/actions/unpublish')) {
       return 'unpublish';
+    }
+
+    // Check for publish/unpublish via publishedAt field changes (PUT/PATCH)
+    if ((method === 'PUT' || method === 'PATCH') && previousEntity) {
+      const requestData = (requestBody?.data || requestBody) as Record<string, unknown> | undefined;
+      const response = responseData as Record<string, unknown> | undefined;
+      const finalPublishedAt = (response?.publishedAt ?? requestData?.publishedAt) as
+        | string
+        | null
+        | undefined;
+      const previousPublishedAt = previousEntity?.publishedAt as string | null | undefined;
+
+      // Publish: publishedAt changes from null/undefined to a date
+      if (finalPublishedAt !== null && finalPublishedAt !== undefined) {
+        if (previousPublishedAt === null || previousPublishedAt === undefined) {
+          return 'publish';
+        }
+      }
+
+      // Unpublish: publishedAt changes from a date to null
+      if (finalPublishedAt === null) {
+        if (previousPublishedAt !== null && previousPublishedAt !== undefined) {
+          return 'unpublish';
+        }
+      }
     }
 
     switch (method) {

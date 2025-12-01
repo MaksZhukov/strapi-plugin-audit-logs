@@ -29,6 +29,37 @@ const bootstrap = ({ strapi }: { strapi: Core.Strapi }) => {
 
     await next();
 
+    // Handle login tracking for user collection
+    const isLogin = ctx.url?.includes('/auth/local') && ctx.method === 'POST';
+
+    if (isLogin && ctx.status >= 200 && ctx.status < 300) {
+      try {
+        const userContentType = auditService.findContentTypeByUid('plugin::users-permissions.user');
+        if (userContentType) {
+          const isEnabled = await auditService.isEnabled(userContentType.uid);
+          if (isEnabled) {
+            const responseData = ctx.body?.data || ctx.body;
+            const entityId = responseData?.user?.id;
+
+            if (entityId) {
+              const user = responseData?.user;
+              await auditService.createAuditLogEntry(
+                userContentType,
+                entityId,
+                'login',
+                user,
+                null,
+                responseData,
+                ctx
+              );
+            }
+          }
+        }
+      } catch (error) {
+        strapi.log.debug('Error tracking login:', error);
+      }
+    }
+
     // Process successful requests to content API
     if (auditService.shouldProcessRequest(ctx.method, ctx.url, ctx.status)) {
       try {
@@ -58,8 +89,14 @@ const bootstrap = ({ strapi }: { strapi: Core.Strapi }) => {
           return;
         }
 
-        const action = auditService.getActionFromMethod(ctx.method, ctx.url!);
         const responseData = ctx.body?.data || ctx.body;
+        const action = auditService.getActionFromMethod(
+          ctx.method,
+          ctx.url!,
+          originalBody as Record<string, unknown> | undefined,
+          previousEntity,
+          responseData as Record<string, unknown> | undefined
+        );
 
         strapi.log.info(
           `[Audit Log] Action: ${action}, Response data:`,

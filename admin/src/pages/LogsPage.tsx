@@ -16,7 +16,7 @@ import {
   Button,
   IconButton,
 } from '@strapi/design-system';
-import { ExternalLink, Search, ArrowLeft } from '@strapi/icons';
+import { ExternalLink, Search, ArrowLeft, Duplicate } from '@strapi/icons';
 import { useIntl } from 'react-intl';
 import { getTranslation } from '../utils/getTranslation';
 import { fetchContentTypeSettings, fetchLogs } from '../api/api';
@@ -33,14 +33,17 @@ const LogsPage = () => {
     searchParams.get('contentType') || ''
   );
   const [searchValue, setSearchValue] = useState<string>('');
-  const [logSearchValue, setLogSearchValue] = useState<string>('');
+  const [logSearchValue, setLogSearchValue] = useState<string>(searchParams.get('search') || '');
+  const [debouncedLogSearchValue, setDebouncedLogSearchValue] = useState<string>(
+    searchParams.get('search') || ''
+  );
   const [isOpen, setIsOpen] = useState<boolean>(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [pagination, setPagination] = useState({
-    page: 1,
+    page: parseInt(searchParams.get('page') || '1', 10),
     pageSize: 25,
     total: 0,
     pageCount: 0,
@@ -57,25 +60,24 @@ const LogsPage = () => {
 
   const loadContentTypes = async (searchQuery: string = '') => {
     try {
-      const result = await fetchContentTypeSettings(
-        pagination.page,
-        pagination.pageSize,
-        searchQuery
-      );
+      const result = await fetchContentTypeSettings(1, 25, searchQuery);
       setContentTypes(result.results.map((s) => s.contentType));
-      setPagination(result.pagination);
     } catch (err) {
       setError('Failed to load content types');
     }
   };
 
   useEffect(() => {
-    loadContentTypes();
-  }, []);
+    const timeoutId = setTimeout(() => {
+      setDebouncedLogSearchValue(logSearchValue);
+    }, 300);
+
+    return () => clearTimeout(timeoutId);
+  }, [logSearchValue]);
 
   useEffect(() => {
     loadLogs();
-  }, [selectedContentType, pagination.page, pagination.pageSize, logSearchValue]);
+  }, [selectedContentType, pagination.page, pagination.pageSize, debouncedLogSearchValue]);
 
   useEffect(() => {
     const timeoutId = setTimeout(() => {
@@ -97,7 +99,7 @@ const LogsPage = () => {
         selectedContentType,
         pagination.page,
         pagination.pageSize,
-        logSearchValue || undefined
+        debouncedLogSearchValue || undefined
       );
       setLogs(logs.results);
       setPagination(logs.pagination);
@@ -113,16 +115,25 @@ const LogsPage = () => {
     setSearchValue(value ? getContentTypeDisplayName(value) : '');
     setIsOpen(false);
     setPagination((prev) => ({ ...prev, page: 1 }));
+    const params = new URLSearchParams();
     if (value) {
-      setSearchParams({ contentType: value });
-    } else {
-      setSearchParams({});
+      params.set('contentType', value);
     }
+    params.set('page', '1');
+    setSearchParams(params);
   };
 
   const handleLogSearchChange = (value: string) => {
     setLogSearchValue(value);
     setPagination((prev) => ({ ...prev, page: 1 }));
+    const params = new URLSearchParams(searchParams);
+    params.set('page', '1');
+    if (value) {
+      params.set('search', value);
+    } else {
+      params.delete('search');
+    }
+    setSearchParams(params);
   };
 
   const handleSearchChange = (value: string) => {
@@ -173,23 +184,6 @@ const LogsPage = () => {
     };
   }, [isOpen]);
 
-  const getActionColor = (action: string) => {
-    switch (action) {
-      case 'create':
-        return 'success600';
-      case 'update':
-        return 'primary600';
-      case 'delete':
-        return 'danger600';
-      case 'publish':
-        return 'success600';
-      case 'unpublish':
-        return 'warning600';
-      default:
-        return 'neutral600';
-    }
-  };
-
   const formatDate = (dateString: string) => {
     return new Date(dateString).toLocaleString();
   };
@@ -201,6 +195,14 @@ const LogsPage = () => {
   const handleViewEntity = (contentType: string, entityId: string) => {
     const url = getContentManagerUrl(contentType, entityId);
     navigate(url);
+  };
+
+  const handleCopyEntityId = async (entityId: string) => {
+    try {
+      await navigator.clipboard.writeText(entityId);
+    } catch (err) {
+      console.error('Failed to copy entity ID:', err);
+    }
   };
 
   return (
@@ -346,22 +348,12 @@ const LogsPage = () => {
           </Box>
         ) : (
           <>
-            <Table colCount={7} rowCount={logs.length}>
+            <Table colCount={5} rowCount={logs.length}>
               <Thead>
                 <Tr>
                   <Th>
                     <Typography variant="sigma">
                       {formatMessage({ id: getTranslation('logs.date') })}
-                    </Typography>
-                  </Th>
-                  <Th>
-                    <Typography variant="sigma">
-                      {formatMessage({ id: getTranslation('logs.contentType') })}
-                    </Typography>
-                  </Th>
-                  <Th>
-                    <Typography variant="sigma">
-                      {formatMessage({ id: getTranslation('logs.entityId') })}
                     </Typography>
                   </Th>
                   <Th>
@@ -375,6 +367,9 @@ const LogsPage = () => {
                     </Typography>
                   </Th>
                   <Th>
+                    <Typography variant="sigma">Entity ID</Typography>
+                  </Th>
+                  <Th>
                     <Typography variant="sigma">Link</Typography>
                   </Th>
                 </Tr>
@@ -386,33 +381,36 @@ const LogsPage = () => {
                       <Typography textColor="neutral800">{formatDate(log.createdAt)}</Typography>
                     </Td>
                     <Td>
-                      <Typography textColor="neutral800">
-                        {getContentTypeDisplayName(log.contentType)}
+                      <Typography textTransform="capitalize" textColor="neutral800">
+                        {log.action} {getContentTypeDisplayName(log.contentType)}
                       </Typography>
                     </Td>
                     <Td>
-                      <Typography textColor="neutral800">{log.entityId}</Typography>
+                      <Typography textColor="neutral800">{log.userEmail || '-'}</Typography>
                     </Td>
                     <Td>
-                      <Typography textColor={getActionColor(log.action)}>
-                        {console.log(log)}
-                        {log.action.toUpperCase()}
-                      </Typography>
+                      <Flex alignItems="center" gap={2}>
+                        <IconButton
+                          variant="tertiary"
+                          size="S"
+                          label="Copy Entity ID"
+                          onClick={() => handleCopyEntityId(log.entityId)}
+                        >
+                          <Duplicate />
+                        </IconButton>
+                      </Flex>
                     </Td>
                     <Td>
-                      <Typography textColor="neutral800">
-                        {log.userEmail || (log.userEmail ? `${log.userEmail}` : 'System')}
-                      </Typography>
-                    </Td>
-                    <Td>
-                      <IconButton
-                        variant="tertiary"
-                        size="S"
-                        label="View in Content Manager"
-                        onClick={() => handleViewEntity(log.contentType, log.entityId)}
-                      >
-                        <ExternalLink />
-                      </IconButton>
+                      {log.action !== 'delete' && (
+                        <IconButton
+                          variant="tertiary"
+                          size="S"
+                          label="View in Content Manager"
+                          onClick={() => handleViewEntity(log.contentType, log.entityId)}
+                        >
+                          <ExternalLink />
+                        </IconButton>
+                      )}
                     </Td>
                   </Tr>
                 ))}

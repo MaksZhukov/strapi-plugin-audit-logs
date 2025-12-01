@@ -1,9 +1,4 @@
-import type {
-  ContentTypeSetting,
-  LogsResponse,
-  AuditLog,
-  ContentTypeSettingsResponse,
-} from './types';
+import type { ContentTypeSetting, LogsResponse, ContentTypeSettingsResponse } from './types';
 
 export const fetchContentTypeSettings = async (
   page: number = 1,
@@ -51,8 +46,17 @@ export const fetchLogs = async (
 export const fetchEntityLogs = async (
   contentType: string,
   entityId: string,
-  limit: number
-): Promise<AuditLog[]> => {
-  const response = await fetch(`/audit-logs/logs/${contentType}/${entityId}?limit=${limit}`);
+  page: number = 1,
+  pageSize: number = 25,
+  search?: string
+): Promise<LogsResponse> => {
+  const params = new URLSearchParams({
+    page: page.toString(),
+    pageSize: pageSize.toString(),
+  });
+  if (search) {
+    params.append('search', search);
+  }
+  const response = await fetch(`/audit-logs/logs/${contentType}/${entityId}?${params.toString()}`);
   return response.json();
 };

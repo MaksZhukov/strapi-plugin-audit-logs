@@ -24,12 +24,7 @@ const controller = ({ strapi }: { strapi: Core.Strapi }) => ({
   async updateContentTypeSetting(ctx: any) {
     try {
       const { contentType } = ctx.params;
-      const { enabled } = ctx.request.body;
-
-      if (typeof enabled !== 'boolean') {
-        return ctx.badRequest('enabled must be a boolean');
-      }
-
+      const { enabled } = JSON.parse(ctx.request.body);
       const service = strapi.plugin('audit-logs').service('service');
       await service.setEnabled(contentType, enabled);
 
@@ -64,12 +59,14 @@ const controller = ({ strapi }: { strapi: Core.Strapi }) => ({
   async getEntityLogs(ctx: any) {
     try {
       const { contentType, entityId } = ctx.params;
-      const limit = parseInt(ctx.query.limit || '50');
+      const page = parseInt(ctx.query.page || '1');
+      const pageSize = parseInt(ctx.query.pageSize || '25');
+      const search = ctx.query.search || '';
 
       const service = strapi.plugin('audit-logs').service('service');
-      const logs = await service.getLogs(contentType, entityId, limit);
+      const result = await service.getLogsPaginated(contentType, page, pageSize, search, entityId);
 
-      ctx.body = { data: logs };
+      ctx.body = result;
     } catch (error) {
       ctx.throw(500, error);
     }

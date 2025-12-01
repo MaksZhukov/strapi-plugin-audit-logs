@@ -67,11 +67,12 @@ const Pagination = ({ page, pageCount, onPageChange }: PaginationProps) => {
                 </Typography>
               );
             }
+            const isActive = pageItem === page;
             return (
               <Button
                 key={pageItem}
                 onClick={handleChangePagination(pageItem as number)}
-                variant="tertiary"
+                variant={isActive ? 'default' : 'tertiary'}
               >
                 {pageItem}
               </Button>

@@ -1,6 +1,6 @@
 import type { Core } from '@strapi/strapi';
 
-export type AuditAction = 'create' | 'update' | 'delete' | 'publish' | 'unpublish';
+export type AuditAction = 'create' | 'update' | 'delete' | 'publish' | 'unpublish' | 'login';
 
 export type ContentType = {
   uid?: string;

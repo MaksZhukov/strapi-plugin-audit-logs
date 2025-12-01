@@ -5,12 +5,15 @@ A comprehensive audit logging plugin for Strapi v5 that tracks all content type 
 ## Features
 
 - ✅ Track all content type changes (create, update, delete, publish, unpublish)
-- ✅ Enable/disable audit logging per content type
-- ✅ View audit logs with filtering by content type
+- ✅ Track user login events for the user collection
+- ✅ Enable/disable audit logging per content type (including user collection)
+- ✅ View audit logs with filtering by content type and search functionality
 - ✅ Detailed change tracking with before/after values
 - ✅ User information tracking (user ID, email)
 - ✅ IP address and user agent logging
-- ✅ Direct link to view entities in Content Manager
+- ✅ Direct link to view entities in Content Manager (hidden for delete actions)
+- ✅ Entity ID column with copy-to-clipboard functionality
+- ✅ Debounced search for improved performance
 - ✅ Hidden content types (not visible in Content Manager or Content-Type Builder)
 - ✅ Well-structured service-based architecture
 - ✅ TypeScript support with comprehensive type definitions
@@ -27,6 +30,12 @@ yarn add strapi-plugin-audit-logs
 
 The plugin is automatically available in your Strapi admin panel after installation. Navigate to the **Audit Logs** section in the sidebar.
 
+## Screenshots
+
+![Audit Logs Settings](preview1.png)
+
+![Audit Logs View](preview2.png)
+
 ## Usage
 
 ### Enabling Audit Logging
@@ -38,8 +47,10 @@ The plugin is automatically available in your Strapi admin panel after installat
 ### Viewing Audit Logs
 
 1. Navigate to **Audit Logs** → **Logs**
-2. Filter by content type if needed
-3. Click the link icon to view the entity in Content Manager
+2. Filter by content type using the dropdown
+3. Search logs by entity ID, user email, action, or content type (with debounced search)
+4. Click the link icon to view the entity in Content Manager (not available for delete actions)
+5. Click the copy icon next to Entity ID to copy it to clipboard
 
 ## What Gets Logged
 
@@ -48,8 +59,18 @@ The plugin automatically logs the following actions:
 - **Create**: When a new entity is created
 - **Update**: When an entity is updated
 - **Delete**: When an entity is deleted
-- **Publish**: When an entity is published
-- **Unpublish**: When an entity is unpublished
+- **Publish**: When an entity is published (detected via `/actions/publish` endpoint or PUT request that sets `publishedAt` from null to a date)
+- **Unpublish**: When an entity is unpublished (detected via `/actions/unpublish` endpoint or PUT request that sets `publishedAt` from a date to null)
+- **Login**: When a user logs in via `/api/auth/local` (for user collection only)
+
+### Publish/Unpublish Detection
+
+The plugin detects publish/unpublish actions in two ways:
+
+1. **Via dedicated endpoints**: When using `/api/{content-type}/{id}/actions/publish` or `/api/{content-type}/{id}/actions/unpublish`
+2. **Via PUT requests**: When a PUT/PATCH request changes the `publishedAt` field:
+   - **Publish**: `publishedAt` changes from `null`/`undefined` to a date
+   - **Unpublish**: `publishedAt` changes from a date to `null`
 
 Each log entry includes:
 
@@ -75,37 +96,11 @@ The audit logs service provides the following methods:
 - `getContentTypeSettings()` - Get all content types with their audit log settings
 - `getContentTypeSettingsPaginated(page, pageSize, search)` - Get paginated content type settings
 - `createLog(data)` - Create an audit log entry
-- `getLogs(contentType, entityId, limit)` - Get audit logs for a content type
-- `getLogsPaginated(contentType, page, pageSize, search)` - Get paginated audit logs
-
-### Helper Methods
-
-The service also includes helper methods used internally:
-
-- `parseApiUrl(url)` - Parse API URL to extract API name and entity ID
-- `findContentTypeByPluralName(pluralName)` - Find content type by plural name
-- `fetchPreviousEntity(contentType, entityId)` - Fetch previous entity state before modification
-- `extractEntityId(urlParts, responseData, originalBody)` - Extract entity ID from various sources
-- `calculateChanges(previousEntity, newEntity)` - Calculate changes between entity states
-- `getActionFromMethod(method, url)` - Determine audit action from HTTP method and URL
-- `shouldProcessRequest(method, url, status)` - Check if request should be processed
-- `needsPreviousEntity(method, url)` - Check if previous entity needs to be fetched
-- `getUserFromContext(ctx)` - Extract user information from request context
-- `createAuditLogEntry(...)` - Create audit log entry with all necessary data
-
-### Type Definitions
-
-All TypeScript types are centralized in `server/src/types/index.ts`:
-
-- `AuditAction` - Type for audit actions (create, update, delete, publish, unpublish)
-- `ContentType` - Type for Strapi content types
-- `KoaContext` - Type for Koa request context
-- `ParsedUrl` - Interface for parsed API URLs
-- `AuditLogData` - Interface for audit log entry data
+- `getLogsPaginated(contentType, page, pageSize, search, entityId)` - Get paginated audit logs (supports filtering by contentType and entityId)
 
 ### Project Structure
 
-```
+```text
 src/plugins/audit-logs/
 ├── admin/              # Admin panel UI
 │   └── src/
