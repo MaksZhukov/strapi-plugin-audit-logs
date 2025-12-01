@@ -1,17 +1,7 @@
 import type { Core } from '@strapi/strapi';
+import type { AuditAction, ContentType, KoaContext, ParsedUrl, AuditLogData } from '../types';
 
-export interface AuditLogData {
-  contentType: string;
-  entityId: string | number;
-  action: 'create' | 'update' | 'delete' | 'publish' | 'unpublish';
-  userId?: number;
-  userEmail?: string;
-  changes?: any;
-  previousValues?: any;
-  newValues?: any;
-  ipAddress?: string;
-  userAgent?: string;
-}
+export type { AuditAction, ContentType, KoaContext, ParsedUrl, AuditLogData };
 
 const service = ({ strapi }: { strapi: Core.Strapi }) => ({
   /**
@@ -80,6 +70,64 @@ const service = ({ strapi }: { strapi: Core.Strapi }) => ({
   },
 
   /**
+   * Get content types with their audit log settings with pagination
+   */
+  async getContentTypeSettingsPaginated(page = 1, pageSize = 25, search = '') {
+    try {
+      const settings = await strapi.db.query('plugin::audit-logs.audit-log-setting').findMany();
+
+      const settingsMap = new Map(settings.map((s) => [s.contentType, s.enabled]));
+
+      let allContentTypes = Object.values(strapi.contentTypes)
+        .filter((ct: any) => ct.uid?.startsWith('api::') && ct.kind === 'collectionType')
+        .map((ct: any) => ({
+          contentType: ct.uid,
+          enabled: settingsMap.get(ct.uid) ?? false,
+        }));
+
+      if (search) {
+        const searchLower = search.toLowerCase();
+        allContentTypes = allContentTypes.filter((ct) => {
+          const displayName = this.getContentTypeDisplayName(ct.contentType).toLowerCase();
+          return (
+            displayName.includes(searchLower) || ct.contentType.toLowerCase().includes(searchLower)
+          );
+        });
+      }
+
+      const total = allContentTypes.length;
+      const startIndex = (page - 1) * pageSize;
+      const endIndex = startIndex + pageSize;
+      const paginatedContentTypes = allContentTypes.slice(startIndex, endIndex);
+
+      return {
+        results: paginatedContentTypes,
+        pagination: {
+          page,
+          pageSize,
+          total,
+          pageCount: Math.ceil(total / pageSize),
+        },
+      };
+    } catch (error) {
+      strapi.log.error('Error getting paginated content type settings:', error);
+      throw error;
+    }
+  },
+
+  /**
+   * Helper method to get display name from content type UID
+   */
+  getContentTypeDisplayName(uid: string): string {
+    const parts = uid.split('.');
+    if (parts.length > 1) {
+      const name = parts[parts.length - 1];
+      return name.charAt(0).toUpperCase() + name.slice(1);
+    }
+    return uid;
+  },
+
+  /**
    * Create an audit log entry
    */
   async createLog(data: AuditLogData): Promise<void> {
@@ -105,7 +153,6 @@ const service = ({ strapi }: { strapi: Core.Strapi }) => ({
       });
     } catch (error) {
       strapi.log.error('Error creating audit log:', error);
-      // Don't throw - we don't want audit logging to break the main operation
     }
   },
 
@@ -135,11 +182,21 @@ const service = ({ strapi }: { strapi: Core.Strapi }) => ({
   /**
    * Get audit logs with pagination
    */
-  async getLogsPaginated(contentType?: string, page = 1, pageSize = 25) {
+  async getLogsPaginated(contentType?: string, page = 1, pageSize = 25, search = '') {
     try {
       const where: any = {};
       if (contentType) {
         where.contentType = contentType;
+      }
+
+      if (search) {
+        const searchLower = search.toLowerCase();
+        where.$or = [
+          { entityId: { $contains: search } },
+          { userEmail: { $contains: search } },
+          { action: { $contains: searchLower } },
+          { contentType: { $contains: search } },
+        ];
       }
 
       const [logs, total] = await Promise.all([
@@ -165,6 +222,189 @@ const service = ({ strapi }: { strapi: Core.Strapi }) => ({
       strapi.log.error('Error getting paginated audit logs:', error);
       throw error;
     }
+  },
+
+  /**
+   * Parses the API URL to extract API name and entity ID
+   */
+  parseApiUrl(url: string): ParsedUrl {
+    const urlParts = url.split('/').filter(Boolean);
+    const isApiRoute = urlParts.length >= 2 && urlParts[0] === 'api';
+
+    return {
+      apiName: isApiRoute ? urlParts[1] : null,
+      entityId: urlParts.length >= 3 ? urlParts[2] : null,
+      urlParts,
+    };
+  },
+
+  /**
+   * Finds a content type by its plural name
+   */
+  findContentTypeByPluralName(pluralName: string): ContentType | undefined {
+    return Object.values(strapi.contentTypes).find(
+      (ct): ct is ContentType =>
+        ct.info?.pluralName === pluralName &&
+        ct.kind === 'collectionType' &&
+        ct.uid?.startsWith('api::')
+    );
+  },
+
+  /**
+   * Fetches the previous entity state before modification
+   */
+  async fetchPreviousEntity(
+    contentType: ContentType,
+    entityId: string
+  ): Promise<Record<string, unknown> | null> {
+    const contentTypeUid = contentType.uid;
+    if (!contentTypeUid || typeof contentTypeUid !== 'string') {
+      return null;
+    }
+
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const document = await (strapi.documents as any)(contentTypeUid).findOne({
+        documentId: entityId,
+      });
+      return document as Record<string, unknown> | null;
+    } catch (error) {
+      strapi.log.debug(`Could not fetch previous entity for audit log: ${error}`);
+      return null;
+    }
+  },
+
+  /**
+   * Extracts entity ID from various sources (URL, response, request body)
+   */
+  extractEntityId(
+    urlParts: string[],
+    responseData: unknown,
+    originalBody: unknown
+  ): string | number | null {
+    // Try URL first
+    if (urlParts.length >= 3) {
+      return urlParts[2];
+    }
+
+    // Try response data
+    const response = responseData as Record<string, unknown> | undefined;
+    if (response?.documentId) return response.documentId as string | number;
+    if (response?.id) return response.id as string | number;
+
+    // Try request body
+    const body = originalBody as { data?: Record<string, unknown> } | undefined;
+    if (body?.data?.documentId) return body.data.documentId as string | number;
+    if (body?.data?.id) return body.data.id as string | number;
+
+    return null;
+  },
+
+  /**
+   * Calculates changes between previous and new entity states
+   */
+  calculateChanges(
+    previousEntity: Record<string, unknown>,
+    newEntity: Record<string, unknown>
+  ): Record<string, { from: unknown; to: unknown }> | undefined {
+    const changes: Record<string, { from: unknown; to: unknown }> = {};
+
+    Object.keys(newEntity).forEach((key) => {
+      const prevValue = previousEntity[key];
+      const newValue = newEntity[key];
+
+      if (JSON.stringify(prevValue) !== JSON.stringify(newValue)) {
+        changes[key] = { from: prevValue, to: newValue };
+      }
+    });
+
+    return Object.keys(changes).length > 0 ? changes : undefined;
+  },
+
+  /**
+   * Determines the audit action from HTTP method and URL
+   */
+  getActionFromMethod(method: string, url: string): AuditAction | null {
+    if (url.includes('/actions/publish')) {
+      return 'publish';
+    }
+    if (url.includes('/actions/unpublish')) {
+      return 'unpublish';
+    }
+
+    switch (method) {
+      case 'POST':
+        return 'create';
+      case 'PUT':
+      case 'PATCH':
+        return 'update';
+      case 'DELETE':
+        return 'delete';
+      default:
+        return null;
+    }
+  },
+
+  /**
+   * Checks if the request should be processed for audit logging
+   */
+  shouldProcessRequest(method: string, url: string | undefined, status: number): boolean {
+    return status >= 200 && status < 300 && url?.startsWith('/api/') === true && method !== 'GET';
+  },
+
+  /**
+   * Checks if the request needs previous entity fetching
+   */
+  needsPreviousEntity(method: string, url: string | undefined): boolean {
+    return (
+      (method === 'PUT' || method === 'PATCH' || method === 'DELETE') &&
+      url?.startsWith('/api/') === true
+    );
+  },
+
+  /**
+   * Gets user information from the request context
+   */
+  getUserFromContext(ctx: KoaContext) {
+    return ctx.state?.user || ctx.state?.auth?.user;
+  },
+
+  /**
+   * Creates an audit log entry with all necessary data
+   */
+  async createAuditLogEntry(
+    contentType: ContentType,
+    entityId: string | number,
+    action: AuditAction,
+    user: { id?: unknown; email?: unknown } | undefined,
+    previousEntity: Record<string, unknown> | null,
+    responseData: unknown,
+    ctx: KoaContext
+  ): Promise<void> {
+    const response = responseData as Record<string, unknown> | undefined;
+
+    // Calculate changes for update operations
+    const changes =
+      action === 'update' && previousEntity && response
+        ? this.calculateChanges(previousEntity, response)
+        : undefined;
+
+    // Determine previous and new values based on action
+    const previousValues = action === 'delete' || action === 'update' ? previousEntity : undefined;
+    const newValues = action !== 'delete' ? responseData : undefined;
+
+    await this.createLog({
+      contentType: contentType.uid || '',
+      entityId: String(entityId),
+      action,
+      userId: user?.id as number | undefined,
+      userEmail: user?.email as string | undefined,
+      changes,
+      previousValues,
+      newValues,
+      ipAddress: ctx.request?.ip,
+      userAgent: ctx.request?.headers?.['user-agent'],
+    });
   },
 });
 

@@ -17,13 +17,10 @@ import {
 import { useIntl } from 'react-intl';
 import { useNavigate } from 'react-router-dom';
 import { Eye } from '@strapi/icons';
-
 import { getTranslation } from '../utils/getTranslation';
-
-interface ContentTypeSetting {
-  contentType: string;
-  enabled: boolean;
-}
+import { fetchContentTypeSettings, updateContentTypeSetting } from '../api/api';
+import { ContentTypeSetting } from '../api/types';
+import { Pagination } from '../components/Pagination';
 
 const HomePage = () => {
   const { formatMessage } = useIntl();
@@ -31,23 +28,25 @@ const HomePage = () => {
   const [settings, setSettings] = useState<ContentTypeSetting[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
   const [updating, setUpdating] = useState<string | null>(null);
+  const [pagination, setPagination] = useState({
+    page: 1,
+    pageSize: 25,
+    total: 0,
+    pageCount: 0,
+  });
 
   useEffect(() => {
     loadSettings();
-  }, []);
+  }, [pagination.page, pagination.pageSize]);
 
   const loadSettings = async () => {
     try {
       setLoading(true);
       setError(null);
-      const response = await fetch('/audit-logs/content-type-settings');
-      if (!response.ok) {
-        throw new Error('Failed to load settings');
-      }
-      const data = await response.json();
-      setSettings(data.data || []);
+      const result = await fetchContentTypeSettings(pagination.page, pagination.pageSize, '');
+      setSettings(result.results);
+      setPagination(result.pagination);
     } catch (err) {
       setError(formatMessage({ id: getTranslation('homepage.error') }));
     } finally {
@@ -59,33 +58,12 @@ const HomePage = () => {
     try {
       setUpdating(contentType);
       setError(null);
-      setSuccess(null);
 
-      const response = await fetch(
-        `/audit-logs/content-type-settings/${encodeURIComponent(contentType)}`,
-        {
-          method: 'PUT',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ enabled }),
-        }
-      );
+      await updateContentTypeSetting(contentType, enabled);
 
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.error?.message || 'Failed to update setting');
-      }
-
-      const result = await response.json();
-
-      // Update local state
       setSettings((prev) =>
         prev.map((s) => (s.contentType === contentType ? { ...s, enabled } : s))
       );
-
-      setSuccess(formatMessage({ id: getTranslation('homepage.saveSuccess') }));
-      setTimeout(() => setSuccess(null), 3000);
     } catch (err: any) {
       console.error('Toggle error:', err);
       setError(err.message || formatMessage({ id: getTranslation('homepage.saveError') }));
@@ -94,8 +72,11 @@ const HomePage = () => {
     }
   };
 
+  const handlePageChange = (page: number) => {
+    setPagination((prev) => ({ ...prev, page }));
+  };
+
   const getContentTypeDisplayName = (uid: string) => {
-    // Extract the content type name from uid (e.g., "api::article.article" -> "Article")
     const parts = uid.split('.');
     if (parts.length > 1) {
       const name = parts[parts.length - 1];
@@ -136,14 +117,6 @@ const HomePage = () => {
           </Box>
         )}
 
-        {success && (
-          <Box paddingBottom={4}>
-            <Alert closeLabel="Close" title="Success" variant="success">
-              {success}
-            </Alert>
-          </Box>
-        )}
-
         <Table colCount={3} rowCount={settings.length}>
           <Thead>
             <Tr>
@@ -157,11 +130,7 @@ const HomePage = () => {
                   {formatMessage({ id: getTranslation('homepage.enabled') })}
                 </Typography>
               </Th>
-              <Th>
-                <Typography variant="sigma">
-                  {formatMessage({ id: getTranslation('homepage.actions') })}
-                </Typography>
-              </Th>
+              <Th></Th>
             </Tr>
           </Thead>
           <Tbody>
@@ -170,9 +139,6 @@ const HomePage = () => {
                 <Td>
                   <Typography textColor="neutral800">
                     {getContentTypeDisplayName(setting.contentType)}
-                  </Typography>
-                  <Typography variant="pi" textColor="neutral600">
-                    {setting.contentType}
                   </Typography>
                 </Td>
                 <Td>
@@ -206,12 +172,20 @@ const HomePage = () => {
           </Tbody>
         </Table>
 
-        {settings.length === 0 && (
+        {settings.length === 0 && !loading && (
           <Box padding={8} textAlign="center">
             <Typography variant="omega" textColor="neutral600">
               No content types found
             </Typography>
           </Box>
+        )}
+
+        {pagination.pageCount > 1 && (
+          <Pagination
+            page={pagination.page}
+            pageCount={pagination.pageCount}
+            onPageChange={handlePageChange}
+          />
         )}
       </Box>
     </Main>

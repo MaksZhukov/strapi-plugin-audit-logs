@@ -6,9 +6,13 @@ const controller = ({ strapi }: { strapi: Core.Strapi }) => ({
    */
   async getContentTypeSettings(ctx: any) {
     try {
+      const page = parseInt(ctx.query.page || '1');
+      const pageSize = parseInt(ctx.query.pageSize || '25');
+      const search = ctx.query.search || '';
+
       const service = strapi.plugin('audit-logs').service('service');
-      const settings = await service.getContentTypeSettings();
-      ctx.body = { data: settings };
+      const result = await service.getContentTypeSettingsPaginated(page, pageSize, search);
+      ctx.body = result;
     } catch (error) {
       ctx.throw(500, error);
     }
@@ -41,11 +45,12 @@ const controller = ({ strapi }: { strapi: Core.Strapi }) => ({
   async getLogs(ctx: any) {
     try {
       const { contentType } = ctx.query;
-      const page = parseInt(ctx.query.page || '1', 10);
-      const pageSize = parseInt(ctx.query.pageSize || '25', 10);
+      const page = parseInt(ctx.query.page || '1');
+      const pageSize = parseInt(ctx.query.pageSize || '25');
+      const search = ctx.query.search || '';
 
       const service = strapi.plugin('audit-logs').service('service');
-      const result = await service.getLogsPaginated(contentType, page, pageSize);
+      const result = await service.getLogsPaginated(contentType, page, pageSize, search);
 
       ctx.body = result;
     } catch (error) {
@@ -59,7 +64,7 @@ const controller = ({ strapi }: { strapi: Core.Strapi }) => ({
   async getEntityLogs(ctx: any) {
     try {
       const { contentType, entityId } = ctx.params;
-      const limit = parseInt(ctx.query.limit || '50', 10);
+      const limit = parseInt(ctx.query.limit || '50');
 
       const service = strapi.plugin('audit-logs').service('service');
       const logs = await service.getLogs(contentType, entityId, limit);

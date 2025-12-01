@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import {
   Main,
@@ -10,41 +10,18 @@ import {
   Tr,
   Th,
   Td,
-  SingleSelect,
-  SingleSelectOption,
-  Pagination,
+  TextInput,
   Flex,
   Alert,
   Button,
   IconButton,
 } from '@strapi/design-system';
-import { ExternalLink } from '@strapi/icons';
+import { ExternalLink, Search, ArrowLeft } from '@strapi/icons';
 import { useIntl } from 'react-intl';
-
 import { getTranslation } from '../utils/getTranslation';
-
-interface AuditLog {
-  id: number;
-  contentType: string;
-  entityId: string;
-  action: string;
-  userId?: number;
-  userEmail?: string;
-  createdAt: string;
-  changes?: any;
-  previousValues?: any;
-  newValues?: any;
-}
-
-interface LogsResponse {
-  results: AuditLog[];
-  pagination: {
-    page: number;
-    pageSize: number;
-    total: number;
-    pageCount: number;
-  };
-}
+import { fetchContentTypeSettings, fetchLogs } from '../api/api';
+import { AuditLog } from '../api/types';
+import { Pagination } from '../components/Pagination';
 
 const LogsPage = () => {
   const { formatMessage } = useIntl();
@@ -55,6 +32,11 @@ const LogsPage = () => {
   const [selectedContentType, setSelectedContentType] = useState<string>(
     searchParams.get('contentType') || ''
   );
+  const [searchValue, setSearchValue] = useState<string>('');
+  const [logSearchValue, setLogSearchValue] = useState<string>('');
+  const [isOpen, setIsOpen] = useState<boolean>(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [pagination, setPagination] = useState({
@@ -64,53 +46,61 @@ const LogsPage = () => {
     pageCount: 0,
   });
 
+  const getContentTypeDisplayName = (uid: string) => {
+    const parts = uid.split('.');
+    if (parts.length > 1) {
+      const name = parts[parts.length - 1];
+      return name.charAt(0).toUpperCase() + name.slice(1);
+    }
+    return uid;
+  };
+
+  const loadContentTypes = async (searchQuery: string = '') => {
+    try {
+      const result = await fetchContentTypeSettings(
+        pagination.page,
+        pagination.pageSize,
+        searchQuery
+      );
+      setContentTypes(result.results.map((s) => s.contentType));
+      setPagination(result.pagination);
+    } catch (err) {
+      setError('Failed to load content types');
+    }
+  };
+
   useEffect(() => {
     loadContentTypes();
   }, []);
 
   useEffect(() => {
     loadLogs();
-  }, [selectedContentType, pagination.page, pagination.pageSize]);
+  }, [selectedContentType, pagination.page, pagination.pageSize, logSearchValue]);
 
-  const loadContentTypes = async () => {
-    try {
-      const response = await fetch('/audit-logs/content-type-settings');
-      if (!response.ok) {
-        throw new Error('Failed to load content types');
-      }
-      const data = await response.json();
-      const types = (data.data || []).map((s: any) => s.contentType);
-      setContentTypes(types);
-    } catch (err) {
-      console.error('Error loading content types:', err);
-    }
-  };
+  useEffect(() => {
+    const timeoutId = setTimeout(() => {
+      const isSelectedValue =
+        selectedContentType && searchValue === getContentTypeDisplayName(selectedContentType);
+      const searchQuery = isSelectedValue ? '' : searchValue;
+      loadContentTypes(searchQuery);
+    }, 300);
+
+    return () => clearTimeout(timeoutId);
+  }, [searchValue, selectedContentType]);
 
   const loadLogs = async () => {
     try {
       setLoading(true);
       setError(null);
 
-      const params = new URLSearchParams({
-        page: pagination.page.toString(),
-        pageSize: pagination.pageSize.toString(),
-      });
-
-      if (selectedContentType) {
-        params.append('contentType', selectedContentType);
-      }
-
-      const response = await fetch(`/audit-logs/logs?${params.toString()}`);
-      if (!response.ok) {
-        throw new Error('Failed to load logs');
-      }
-
-      const data: LogsResponse = await response.json();
-      setLogs(data.results || []);
-      setPagination((prev) => ({
-        ...prev,
-        ...data.pagination,
-      }));
+      const logs = await fetchLogs(
+        selectedContentType,
+        pagination.page,
+        pagination.pageSize,
+        logSearchValue || undefined
+      );
+      setLogs(logs.results);
+      setPagination(logs.pagination);
     } catch (err) {
       setError('Failed to load audit logs');
     } finally {
@@ -120,6 +110,8 @@ const LogsPage = () => {
 
   const handleContentTypeChange = (value: string) => {
     setSelectedContentType(value);
+    setSearchValue(value ? getContentTypeDisplayName(value) : '');
+    setIsOpen(false);
     setPagination((prev) => ({ ...prev, page: 1 }));
     if (value) {
       setSearchParams({ contentType: value });
@@ -127,6 +119,59 @@ const LogsPage = () => {
       setSearchParams({});
     }
   };
+
+  const handleLogSearchChange = (value: string) => {
+    setLogSearchValue(value);
+    setPagination((prev) => ({ ...prev, page: 1 }));
+  };
+
+  const handleSearchChange = (value: string) => {
+    setSearchValue(value);
+    setIsOpen(true);
+  };
+
+  const handleClear = () => {
+    setSearchValue('');
+    handleContentTypeChange('');
+  };
+
+  const filteredContentTypes = useMemo(() => {
+    if (selectedContentType && searchValue === getContentTypeDisplayName(selectedContentType)) {
+      return contentTypes;
+    }
+    if (!searchValue) {
+      return contentTypes;
+    }
+    const searchLower = searchValue.toLowerCase();
+    return contentTypes.filter((ct) => {
+      const displayName = getContentTypeDisplayName(ct).toLowerCase();
+      return displayName.includes(searchLower) || ct.toLowerCase().includes(searchLower);
+    });
+  }, [contentTypes, searchValue, selectedContentType]);
+
+  useEffect(() => {
+    if (selectedContentType) {
+      setSearchValue(getContentTypeDisplayName(selectedContentType));
+    } else {
+      setSearchValue('');
+    }
+  }, [selectedContentType]);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
+        setIsOpen(false);
+      }
+    };
+
+    if (isOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [isOpen]);
 
   const getActionColor = (action: string) => {
     switch (action) {
@@ -149,18 +194,7 @@ const LogsPage = () => {
     return new Date(dateString).toLocaleString();
   };
 
-  const getContentTypeDisplayName = (uid: string) => {
-    const parts = uid.split('.');
-    if (parts.length > 1) {
-      const name = parts[parts.length - 1];
-      return name.charAt(0).toUpperCase() + name.slice(1);
-    }
-    return uid;
-  };
-
   const getContentManagerUrl = (contentType: string, entityId: string) => {
-    // Convert contentType UID (e.g., api::article.article) to URL format
-    // Remove 'api::' prefix and use the format: api::article.article -> api::article.article
     return `/content-manager/collection-types/${encodeURIComponent(contentType)}/${encodeURIComponent(entityId)}`;
   };
 
@@ -173,27 +207,127 @@ const LogsPage = () => {
     <Main>
       <Box padding={8}>
         <Box paddingBottom={4}>
-          <Typography variant="alpha" as="h1">
-            {formatMessage({ id: getTranslation('logs.title') })}
-          </Typography>
+          <Flex alignItems="center" gap={3}>
+            <Button
+              variant="tertiary"
+              startIcon={<ArrowLeft />}
+              onClick={() => navigate('/plugins/audit-logs')}
+            ></Button>
+            <Typography variant="alpha" as="h1">
+              {formatMessage({ id: getTranslation('logs.title') })}
+            </Typography>
+          </Flex>
         </Box>
 
         <Box paddingBottom={4}>
-          <SingleSelect
-            label={formatMessage({ id: getTranslation('logs.filterByContentType') })}
-            value={selectedContentType}
-            onChange={handleContentTypeChange}
-            placeholder={formatMessage({ id: getTranslation('logs.allContentTypes') })}
-          >
-            <SingleSelectOption value="">
-              {formatMessage({ id: getTranslation('logs.allContentTypes') })}
-            </SingleSelectOption>
-            {contentTypes.map((ct) => (
-              <SingleSelectOption key={ct} value={ct}>
-                {getContentTypeDisplayName(ct)}
-              </SingleSelectOption>
-            ))}
-          </SingleSelect>
+          <Flex gap={3} justifyContent="space-between">
+            <Box position="relative" ref={containerRef}>
+              <TextInput
+                ref={inputRef}
+                label={formatMessage({ id: getTranslation('logs.filterByContentType') })}
+                value={searchValue}
+                onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+                  handleSearchChange(e.target.value)
+                }
+                onFocus={() => setIsOpen(true)}
+                placeholder={formatMessage({ id: getTranslation('logs.allContentTypes') })}
+                startAction={<Search />}
+                onClear={handleClear}
+              />
+              {isOpen && (filteredContentTypes.length > 0 || searchValue === '') && (
+                <Box
+                  position="absolute"
+                  top="100%"
+                  left={0}
+                  right={0}
+                  zIndex={10}
+                  marginTop={1}
+                  background="neutral0"
+                  borderColor="neutral200"
+                  borderStyle="solid"
+                  borderWidth="1px"
+                  borderRadius="4px"
+                  shadow="tableShadow"
+                  maxHeight="300px"
+                  overflow="auto"
+                >
+                  <Box
+                    as="button"
+                    padding={3}
+                    width="100%"
+                    textAlign="left"
+                    onClick={() => handleContentTypeChange('')}
+                    onMouseEnter={(e: React.MouseEvent<HTMLButtonElement>) => {
+                      e.currentTarget.style.backgroundColor = 'var(--strapi-colors-neutral100)';
+                    }}
+                    onMouseLeave={(e: React.MouseEvent<HTMLButtonElement>) => {
+                      e.currentTarget.style.backgroundColor =
+                        selectedContentType === ''
+                          ? 'var(--strapi-colors-primary100)'
+                          : 'transparent';
+                    }}
+                    style={{
+                      cursor: 'pointer',
+                      border: 'none',
+                      background:
+                        selectedContentType === ''
+                          ? 'var(--strapi-colors-primary100)'
+                          : 'transparent',
+                    }}
+                  >
+                    <Typography>
+                      {formatMessage({ id: getTranslation('logs.allContentTypes') })}
+                    </Typography>
+                  </Box>
+                  {filteredContentTypes.map((ct) => (
+                    <Box
+                      key={ct}
+                      as="button"
+                      padding={3}
+                      width="100%"
+                      textAlign="left"
+                      onClick={() => handleContentTypeChange(ct)}
+                      onMouseEnter={(e: React.MouseEvent<HTMLButtonElement>) => {
+                        e.currentTarget.style.backgroundColor = 'var(--strapi-colors-neutral100)';
+                      }}
+                      onMouseLeave={(e: React.MouseEvent<HTMLButtonElement>) => {
+                        e.currentTarget.style.backgroundColor =
+                          selectedContentType === ct
+                            ? 'var(--strapi-colors-primary100)'
+                            : 'transparent';
+                      }}
+                      style={{
+                        cursor: 'pointer',
+                        border: 'none',
+                        background:
+                          selectedContentType === ct
+                            ? 'var(--strapi-colors-primary100)'
+                            : 'transparent',
+                      }}
+                    >
+                      <Typography>{getContentTypeDisplayName(ct)}</Typography>
+                    </Box>
+                  ))}
+                  {filteredContentTypes.length === 0 && searchValue && (
+                    <Box padding={3}>
+                      <Typography textColor="neutral600">No content types found</Typography>
+                    </Box>
+                  )}
+                </Box>
+              )}
+            </Box>
+            <TextInput
+              label={formatMessage({ id: getTranslation('logs.searchLogs') }) || 'Search logs'}
+              value={logSearchValue}
+              onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+                handleLogSearchChange(e.target.value)
+              }
+              style={{ width: '400px' }}
+              placeholder="Search by entity ID, user email, action, or content type..."
+              startAction={<Search />}
+              onClear={() => handleLogSearchChange('')}
+            />
+          </Flex>
         </Box>
 
         {error && (
@@ -261,12 +395,13 @@ const LogsPage = () => {
                     </Td>
                     <Td>
                       <Typography textColor={getActionColor(log.action)}>
+                        {console.log(log)}
                         {log.action.toUpperCase()}
                       </Typography>
                     </Td>
                     <Td>
                       <Typography textColor="neutral800">
-                        {log.userEmail || (log.userId ? `User #${log.userId}` : 'System')}
+                        {log.userEmail || (log.userEmail ? `${log.userEmail}` : 'System')}
                       </Typography>
                     </Td>
                     <Td>
@@ -293,15 +428,11 @@ const LogsPage = () => {
             )}
 
             {pagination.pageCount > 1 && (
-              <Box paddingTop={4}>
-                <Flex justifyContent="center">
-                  <Pagination
-                    activePage={pagination.page}
-                    pageCount={pagination.pageCount}
-                    onPageChange={(page: number) => setPagination((prev) => ({ ...prev, page }))}
-                  />
-                </Flex>
-              </Box>
+              <Pagination
+                page={pagination.page}
+                pageCount={pagination.pageCount}
+                onPageChange={(page: number) => setPagination((prev) => ({ ...prev, page }))}
+              />
             )}
           </>
         )}
